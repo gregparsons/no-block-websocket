@@ -1,4 +1,4 @@
 .idea
-Cargo.toml
+Cargo.lock
 target
 # .env

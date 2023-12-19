@@ -1,0 +1,16 @@
+[package]
+name = "runner_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# https://docs.rs/crate/tokio/latest/features
+tokio = {version="1.29.1", features=["rt-multi-thread", "sync", "rt", "time", "macros"  ]}
+#tokio = {version="1.29.1", features=["full"]}
+
+# init stuff
+dotenvy = "0.15.6"
+tracing = "0.1.37"
+tracing-subscriber = {version = "0.3.16", features=[ "std", "registry", "env-filter", "fmt"]}
+strum={ version= "0.25.0", features=["derive"]}  # https://stackoverflow.com/questions/69015213/how-can-i-display-an-enum-in-lowercase
+strum_macros = "0.25.1"
