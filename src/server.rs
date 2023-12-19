@@ -40,7 +40,7 @@ pub fn run() {
                     // Message::Binary(Vec<u8>)=>{
                     //
                     // },
-                    Message::Ping(ping)=>{
+                    Message::Ping(_ping)=>{
                         // Vec<u8>
                         let _ = websocket.send(Message::Pong(vec![]));
 

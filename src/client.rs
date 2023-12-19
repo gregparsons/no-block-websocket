@@ -12,7 +12,7 @@ pub struct Client{
 impl Client {
 
     pub fn new()->Self{
-        let (mut socket, response) =
+        let (socket, response) =
             connect(url::Url::parse("ws://localhost:3012/socket")
                 .unwrap())
                 .expect("Can't connect");
