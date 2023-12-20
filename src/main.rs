@@ -22,7 +22,7 @@ fn main(){
     });
 
     h1.join().unwrap();
-    // h2.join().unwrap();
+    h2.join().unwrap();
 
 
 }

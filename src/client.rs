@@ -4,6 +4,8 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tungstenite::{connect, Message, WebSocket};
+use tungstenite::protocol::CloseFrame;
+use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::stream::MaybeTlsStream;
 
 
@@ -14,7 +16,7 @@ pub struct Client{
 impl Client {
 
     pub fn new()->Self{
-        let (mut socket, response) =
+        let (socket, response) =
             connect(url::Url::parse("ws://localhost:3012/socket")
                 .unwrap())
                 .expect("Can't connect");
@@ -32,14 +34,21 @@ impl Client {
     pub fn run(&mut self) {
 
 
-        let s = self.socket_arc.clone();
-        let h1 = std::thread::spawn(move || {
+        let s0 = self.socket_arc.clone();
+
+
+        let _ = std::thread::spawn(move || {
             for i in 0..10{
                 tracing::debug!("[client] spawned ping thread: {i}");
                 {
-                    let mut unlocked_socket = s.lock().expect("[client] ping loop couldn't unlock");
+                    let mut unlocked_socket = s0.lock().expect("[client] ping loop couldn't unlock");
                     // unlocked_socket.send(Message::Ping(vec![])).expect("[Client] ping send failed");
-                    unlocked_socket.send(Message::Text(format!("hello {}", i))).expect("[Client] ping send failed");
+                    match unlocked_socket.send(Message::Text(format!("hello {}", i))) {
+                        Ok(_) => {},
+                        Err(e) => {
+                            tracing::error!("[client] send error: {:?}", e);
+                        }
+                    }
                     std::thread::sleep(Duration::from_secs(1));
                 }
             }
@@ -48,34 +57,68 @@ impl Client {
 
         tracing::debug!("[client] moving on after spawned ping thread");
 
-        let s2 = self.socket_arc.clone();
-        let h2 = std::thread::spawn(move ||{
+        let s1 = self.socket_arc.clone();
+        let _ = std::thread::spawn(move ||{
 
             tracing::debug!("[client] 2nd spawn_blocking...");
 
             {
-                let mut unlocked_socket = s2.lock().unwrap();
+                let mut unlocked_socket = s1.lock().unwrap();
                 unlocked_socket.send(Message::Text("Hello WebSocket".into())).unwrap();
             }
             loop {
-                tracing::debug!("[client] second loop...");
-                let mut unlocked_socket = s2.lock().unwrap();
 
-                let msg:Message = unlocked_socket.read().expect("[client] Error reading message");
-                tracing::debug!("[client] Received: {}", msg);
+                tracing::debug!("[client] read loop...");
+                let s3 = s1.clone();
+                {
+                    let mut ws2 = s3.lock().unwrap();
+                    let msg: Message = ws2.read().expect("[client] Error reading message");
+
+                    match msg {
+
+                        Message::Text(txt) => {
+                            tracing::info!("[client::text] rcvd: {}", &txt);
+                            // ws2.send(Message::Text(format!("server rcvd: {txt}"))).unwrap();
+                        }
+                        Message::Ping(_) => {
+                            tracing::debug!("[client] rcvd: PING");
+                            let _ = ws2.send(Message::Pong(vec![]));
+                        },
+                        Message::Pong(_) => {
+                            tracing::debug!("[client] rcvd: PONG");
+                        },
+                        // Message::Binary(Vec<u8>)=>{
+                        //
+                        // },
+                        // Message::Pong(Vec<u8>)=>{
+                        //
+                        // },
+                        Message::Close(_)=> {
+                            tracing::error!("[client] received Message::Close");
+                            break;
+                            // ws2.close(None).unwrap();
+                        },
+                        // Message::Frame(Frame),
+                        _ => {}
+                    }
+                }
             }
+        });
+
+
+        // timeout
+        let s4 = self.socket_arc.clone();
+        let h3 = std::thread::spawn(move ||{
+
+            tracing::debug!("[client] closing websocket in 20 seconds");
+            std::thread::sleep(Duration::from_secs(15));
+            let mut unlocked_socket = s4.lock().unwrap();
+            tracing::debug!("[client] closing client websocket");
+            unlocked_socket.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
 
         });
-        //
-        // // join!(h, h2); // expect("[client] join fail");
-        //
-        // h1.join().unwrap();
-        // h2.join().unwrap();
 
-        loop {
-            tracing::debug!("[client] loop to prevent closing websocket");
-            std::thread::sleep(Duration::from_secs(1));
-        }
+        h3.join().unwrap();
 
         // socket.close(None);
 
