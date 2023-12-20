@@ -12,7 +12,7 @@ strum={ version= "0.25.0", features=["derive"]}  # https://stackoverflow.com/que
 strum_macros = "0.25.1"
 
 
-tokio = {version="1.29.1", features=["rt-multi-thread", "sync", "rt", "time", "macros"  ]}
+#tokio = {version="1.29.1", features=["rt-multi-thread", "sync", "rt", "time", "macros"  ]}
 tungstenite = "0.20.0"
 url = "2.4.0"
 
