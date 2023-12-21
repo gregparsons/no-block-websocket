@@ -116,7 +116,7 @@ impl Server {
                         });
                         handles.push(handle);
                     }
-                    Err(e) => tracing::error!("[server] tungstenite accept error: {e:?}"),
+                    Err(e) => tracing::error!("[server] no-block-websocket accept error: {e:?}"),
                 }
             },
             Err(e) => tracing::error!("[server] TcpStream accept error: {e:?}"),

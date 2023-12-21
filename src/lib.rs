@@ -1,19 +1,17 @@
-//! lib
+//! lib.rs
 //!
 //!
 
-use std::time::Duration;
-use crate::command::Cmd;
+pub mod init;
+pub mod client;
+pub mod server;
+pub mod command;
 
-mod init;
-mod client;
-mod server;
-mod command;
+pub const TEST_SHUTDOWN_TIMER_SEC:u64 = 1;
+pub const SERVER_READ_POLL_MS:u64 = 1;
+pub const CLIENT_READ_POLL_MS:u64 = 1;
 
-const TEST_SHUTDOWN_TIMER_SEC:u64 = 1;
-const SERVER_READ_POLL_MS:u64 = 1;
-const CLIENT_READ_POLL_MS:u64 = 1;
-
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
     use crate::{client, init, server};
@@ -23,14 +21,14 @@ mod tests {
     /// Client gets told to shutdown after four seconds
     #[test]
     fn simulated_main() {
-        init::init("tungstenite");
+        init::init("no-block-websocket");
         tracing::debug!("[main]");
 
 
-        let (s_tx, s_rx) = crossbeam_channel::unbounded::<Cmd>();
+        let (_server_tx, server_rx) = crossbeam_channel::unbounded::<Cmd>();
 
         let h1 = std::thread::spawn(|| {
-            server::Server::run(s_rx);
+            server::Server::run(server_rx);
         });
 
         let (client_tx, client_rx) = crossbeam_channel::unbounded::<Cmd>();
