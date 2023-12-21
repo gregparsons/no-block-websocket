@@ -1,4 +1,4 @@
-## Non-blocking tungstenite websockets without Tokio
+## Non-blocking Tungstenite websockets without Tokio
 
 Usage:
 ```cargo test```
