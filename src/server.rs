@@ -20,8 +20,14 @@ impl Server {
 
         match tcp_listener.accept() {
             Ok((tcp_stream, _addr)) => {
-                match tungstenite::accept(tcp_stream){
+
+                let tcp_stream = Arc::new(tcp_stream);
+
+                match tungstenite::accept(tcp_stream.try_clone().unwrap()){
                     Ok(ws) => {
+
+                        tcp_stream.set_nonblocking(true).unwrap();
+
                         let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
 
 
@@ -63,7 +69,7 @@ impl Server {
                                                 }
                                             }
                                             Message::Ping(_ping) => {
-                                                // Vec<u8>
+                                                tracing::info!("[server] rcvd: PING");
                                                 let _ = ws2.send(Message::Pong(vec![]));
                                             },
                                             // Message::Binary(Vec<u8>)=>{

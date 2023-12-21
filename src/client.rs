@@ -1,4 +1,6 @@
 //! client.rs
+//!
+//! non-blocking websocket read() effectively polls instead of waiting and blocking the entire thread/socket
 
 use std::net::{TcpStream};
 use std::sync::{Arc, Mutex};
@@ -27,8 +29,8 @@ impl Client {
         ).unwrap();
         // let (socket, response) = connect(url::Url::parse("ws://localhost:3012/socket").unwrap()).expect("Can't connect");
 
+        // set non-blocking after handshake...it matters
         tcp_stream.set_nonblocking(true).expect("set_nonblocking call failed");
-
 
         tracing::debug!("[client] Connected to the server");
         tracing::debug!("[client] Response HTTP code: {}", response.status());
@@ -41,22 +43,24 @@ impl Client {
     }
 
 
+    /// PING
     fn send_counter(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
         let max = 100;
 
         tracing::debug!("[client] spawned counter thread to {max}");
         for i in 0..max {
-            tracing::debug!("[client] counter: {i}");
+            tracing::debug!("[client] sending ping: {i}");
             // lock websocket
             {
                 let mut unlocked_socket = ws_arc.lock().expect("[client] ping loop couldn't unlock");
                 // tracing::debug!("[client] ws locked, sending count");
-                match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
+
+                match unlocked_socket.send(Message::Ping(vec![])){
+                // match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
                     Ok(_) => {},
                     Err(e) => {
                         tracing::error!("[client] send error: {:?}", e);
                         break;
-
                     }
                 }
             }
@@ -65,12 +69,8 @@ impl Client {
         }
     }
 
-
-
     pub fn run(&mut self) {
-
         let mut handles = vec![];
-
         // thread to send 100 messages to server
         let s0 = self.socket_arc.clone();
         let join_handle_0 = std::thread::spawn(move || {
@@ -78,7 +78,6 @@ impl Client {
         });
         handles.push(join_handle_0);
         tracing::debug!("[client] spawned counter thread");
-
 
         // thread to read from the socket
         // read currently blocks, blocking the above "heartbeat"
@@ -116,15 +115,10 @@ impl Client {
                                     // Message::Binary(Vec<u8>)=>{
                                     //
                                     // },
-                                    // Message::Pong(Vec<u8>)=>{
-                                    //
-                                    // },
                                     Message::Close(_) => {
                                         tracing::error!("[client] received Message::Close");
                                         break;
-                                        // ws2.close(None).unwrap();
                                     },
-                                    // Message::Frame(Frame),
                                     _ => {}
                                 }
                             }
@@ -132,21 +126,16 @@ impl Client {
                                 // tracing::error!("[client] read error: {e:?}");
                             }
                         }
-
-                        // let msg: Message = ws2.read().expect("[client] Error reading message");
-
                     }
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(10));
             }
         });
         handles.push(join_handle_1);
 
-
-        // close after a certain time
+        // TEST: close after a certain time
         let s4 = self.socket_arc.clone();
         let h3 = std::thread::spawn(move ||{
-
             let closing_time = 90;
             tracing::error!("[client] closing client websocket in {closing_time} seconds");
             std::thread::sleep(Duration::from_secs(closing_time));
@@ -159,7 +148,6 @@ impl Client {
 
         for h in handles {
             h.join().unwrap();
-
         }
 
         // socket.close(None);
