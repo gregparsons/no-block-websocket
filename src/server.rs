@@ -22,69 +22,63 @@ impl Server {
             Ok((tcp_stream, _addr)) => {
                 match tungstenite::accept(tcp_stream){
                     Ok(ws) => {
+                        let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
 
+
+                        // closer thread
+                        let ws1 = ws_arc.clone();
+                        spawn(move ||{
+                            let closing_time = 30;
+                            tracing::error!("[server] closing in {closing_time} seconds");
+                            std::thread::sleep(Duration::from_secs(closing_time));
+                            tracing::error!("[server] closing...");
+                            let mut ws1 = ws1.lock().unwrap();
+                            match ws1.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })) {
+                                Ok(_) => { tracing::debug!("[server] closed)"); },
+                                Err(e) => {tracing::debug!("[server] close error: {e:?})"); },
+                            }
+                        });
+
+                        let ws2 = ws_arc.clone();
                         spawn(move || {
 
-                            // let callback = |req: &Request, mut response: Response| {
-                                tracing::info!("[server] Received a new ws handshake");
-                                // println!("The request's path is: {}", req.uri().path());
-                            //
-                            //     // println!("The request's headers are:");
-                            //     // for (ref header, _value) in req.headers() {
-                            //     //     println!("* {}", header);
-                            //     // }
-                            //     // Let's add an additional header to our response to the client.
-                            //     // let headers = response.headers_mut();
-                            //     // headers.append("MyCustomHeader", ":)".parse().unwrap());
-                            //     // headers.append("SOME_TUNGSTENITE_HEADER", "header_value".parse().unwrap());
-                            //
-                            //     Ok(response)
-                            // };
-                            // let ws = accept_hdr(stream.unwrap(), callback).unwrap();
-
-                            let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
-
-                            let ws1 = ws_arc.clone();
-                            spawn(move ||{
-                                std::thread::sleep(Duration::from_secs(20));
-                                tracing::error!("[server] closing...");
-                                let mut ws1 = ws1.lock().unwrap();
-                                ws1.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
-                            });
-
-                            let ws2 = ws_arc.clone();
+                            // read loop
                             loop {
-                                let mut ws2 = ws2.lock().unwrap();
 
-                                // read loop
-                                if let Ok(msg) = ws2.read() {
-                                    match msg {
-                                        Message::Text(txt) => {
-                                            tracing::info!("[server] received text: {}", &txt);
-                                            match ws2.send(Message::Text(format!("server rcvd: {txt}"))) {
-                                                Ok(_) => {},
-                                                Err(e) => {
-                                                    tracing::error!("[server] send after close: {e:?}");
-                                                    // ws2.close(None).unwrap();
-                                                    break;
+                                {
+                                    let mut ws2 = ws2.lock().unwrap();
+
+                                    // read loop
+                                    if let Ok(msg) = ws2.read() {
+                                        match msg {
+                                            Message::Text(txt) => {
+                                                tracing::info!("[server] received text: {}", &txt);
+                                                match ws2.send(Message::Text(format!("server rcvd: {txt}"))) {
+                                                    Ok(_) => {},
+                                                    Err(e) => {
+                                                        tracing::error!("[server] send after close: {e:?}");
+                                                        // ws2.close(None).unwrap();
+                                                        break;
+                                                    }
                                                 }
                                             }
+                                            Message::Ping(_ping) => {
+                                                // Vec<u8>
+                                                let _ = ws2.send(Message::Pong(vec![]));
+                                            },
+                                            // Message::Binary(Vec<u8>)=>{
+                                            //
+                                            // },
+                                            // Message::Pong(Vec<u8>)=>{
+                                            //
+                                            // },
+                                            // Message::Close(Option<CloseFrame<'static>>),
+                                            // Message::Frame(Frame),
+                                            _ => {}
                                         }
-                                        Message::Ping(_ping) => {
-                                            // Vec<u8>
-                                            let _ = ws2.send(Message::Pong(vec![]));
-                                        },
-                                        // Message::Binary(Vec<u8>)=>{
-                                        //
-                                        // },
-                                        // Message::Pong(Vec<u8>)=>{
-                                        //
-                                        // },
-                                        // Message::Close(Option<CloseFrame<'static>>),
-                                        // Message::Frame(Frame),
-                                        _ => {}
                                     }
                                 }
+                                // mutex now unlocked
                             }
                         });
 

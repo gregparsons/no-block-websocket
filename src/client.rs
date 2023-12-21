@@ -1,9 +1,10 @@
 //! client.rs
 
-use std::net::TcpStream;
+use std::net::{TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tungstenite::{connect, Message, WebSocket};
+use tungstenite::{Message, WebSocket};
+use tungstenite::client::client_with_config;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::stream::MaybeTlsStream;
@@ -14,12 +15,20 @@ pub struct Client{
 }
 
 impl Client {
-
     pub fn new()->Self{
-        let (socket, response) =
-            connect(url::Url::parse("ws://localhost:3012/socket")
-                .unwrap())
-                .expect("Can't connect");
+
+        let tcp_stream = Arc::new(TcpStream::connect("127.0.0.1:3012").unwrap());
+        let t1 = tcp_stream.clone();
+
+        let (socket, response) = client_with_config(
+            url::Url::parse("ws://localhost:3012/socket").unwrap(),
+            MaybeTlsStream::Plain(t1.try_clone().unwrap()),
+            None
+        ).unwrap();
+        // let (socket, response) = connect(url::Url::parse("ws://localhost:3012/socket").unwrap()).expect("Can't connect");
+
+        tcp_stream.set_nonblocking(true).expect("set_nonblocking call failed");
+
 
         tracing::debug!("[client] Connected to the server");
         tracing::debug!("[client] Response HTTP code: {}", response.status());
@@ -31,96 +40,130 @@ impl Client {
         Client{ socket_arc: Arc::new(Mutex::new(socket)) }
     }
 
-    pub fn run(&mut self) {
 
+    fn send_counter(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+        let max = 100;
 
-        let s0 = self.socket_arc.clone();
+        tracing::debug!("[client] spawned counter thread to {max}");
+        for i in 0..max {
+            tracing::debug!("[client] counter: {i}");
+            // lock websocket
+            {
+                let mut unlocked_socket = ws_arc.lock().expect("[client] ping loop couldn't unlock");
+                // tracing::debug!("[client] ws locked, sending count");
+                match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        tracing::error!("[client] send error: {:?}", e);
+                        break;
 
-
-        let _ = std::thread::spawn(move || {
-            for i in 0..10{
-                tracing::debug!("[client] spawned ping thread: {i}");
-                {
-                    let mut unlocked_socket = s0.lock().expect("[client] ping loop couldn't unlock");
-                    // unlocked_socket.send(Message::Ping(vec![])).expect("[Client] ping send failed");
-                    match unlocked_socket.send(Message::Text(format!("hello {}", i))) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            tracing::error!("[client] send error: {:?}", e);
-                        }
                     }
-                    std::thread::sleep(Duration::from_secs(1));
                 }
             }
+            // websocket unlocked
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
 
+
+
+    pub fn run(&mut self) {
+
+        let mut handles = vec![];
+
+        // thread to send 100 messages to server
+        let s0 = self.socket_arc.clone();
+        let join_handle_0 = std::thread::spawn(move || {
+            Client::send_counter(s0);
         });
+        handles.push(join_handle_0);
+        tracing::debug!("[client] spawned counter thread");
 
-        tracing::debug!("[client] moving on after spawned ping thread");
 
+        // thread to read from the socket
+        // read currently blocks, blocking the above "heartbeat"
+        // https://github.com/snapview/tungstenite-rs/issues/11
         let s1 = self.socket_arc.clone();
-        let _ = std::thread::spawn(move ||{
+        let join_handle_1 = std::thread::spawn(move ||{
+            tracing::debug!("[client] starting read loop thread...");
 
-            tracing::debug!("[client] 2nd spawn_blocking...");
-
-            {
-                let mut unlocked_socket = s1.lock().unwrap();
-                unlocked_socket.send(Message::Text("Hello WebSocket".into())).unwrap();
-            }
             loop {
 
-                tracing::debug!("[client] read loop...");
+                // tracing::debug!("[client] reading...");
                 let s3 = s1.clone();
                 {
                     let mut ws2 = s3.lock().unwrap();
-                    let msg: Message = ws2.read().expect("[client] Error reading message");
 
-                    match msg {
 
-                        Message::Text(txt) => {
-                            tracing::info!("[client::text] rcvd: {}", &txt);
-                            // ws2.send(Message::Text(format!("server rcvd: {txt}"))).unwrap();
+                    // https://www.reddit.com/r/rust/comments/dktiwf/reading_from_a_tcpstream_without_blocking/?rdt=54487
+                    if ws2.can_read() {
+
+                        match ws2.read() {
+                            Ok(msg) => {
+
+                                match msg {
+                                    Message::Text(txt) => {
+                                        tracing::info!("[client::text] rcvd: {}", &txt);
+                                        // ws2.send(Message::Text(format!("server rcvd: {txt}"))).unwrap();
+                                    }
+                                    Message::Ping(_) => {
+                                        tracing::debug!("[client] rcvd: PING");
+                                        let _ = ws2.send(Message::Pong(vec![]));
+                                    },
+                                    Message::Pong(_) => {
+                                        tracing::debug!("[client] rcvd: PONG");
+                                    },
+                                    // Message::Binary(Vec<u8>)=>{
+                                    //
+                                    // },
+                                    // Message::Pong(Vec<u8>)=>{
+                                    //
+                                    // },
+                                    Message::Close(_) => {
+                                        tracing::error!("[client] received Message::Close");
+                                        break;
+                                        // ws2.close(None).unwrap();
+                                    },
+                                    // Message::Frame(Frame),
+                                    _ => {}
+                                }
+                            }
+                            Err(_e) => {
+                                // tracing::error!("[client] read error: {e:?}");
+                            }
                         }
-                        Message::Ping(_) => {
-                            tracing::debug!("[client] rcvd: PING");
-                            let _ = ws2.send(Message::Pong(vec![]));
-                        },
-                        Message::Pong(_) => {
-                            tracing::debug!("[client] rcvd: PONG");
-                        },
-                        // Message::Binary(Vec<u8>)=>{
-                        //
-                        // },
-                        // Message::Pong(Vec<u8>)=>{
-                        //
-                        // },
-                        Message::Close(_)=> {
-                            tracing::error!("[client] received Message::Close");
-                            break;
-                            // ws2.close(None).unwrap();
-                        },
-                        // Message::Frame(Frame),
-                        _ => {}
+
+                        // let msg: Message = ws2.read().expect("[client] Error reading message");
+
                     }
                 }
+                std::thread::sleep(Duration::from_millis(100));
             }
         });
+        handles.push(join_handle_1);
 
 
-        // timeout
+        // close after a certain time
         let s4 = self.socket_arc.clone();
         let h3 = std::thread::spawn(move ||{
 
-            tracing::debug!("[client] closing websocket in 20 seconds");
-            std::thread::sleep(Duration::from_secs(15));
+            let closing_time = 90;
+            tracing::error!("[client] closing client websocket in {closing_time} seconds");
+            std::thread::sleep(Duration::from_secs(closing_time));
             let mut unlocked_socket = s4.lock().unwrap();
             tracing::debug!("[client] closing client websocket");
             unlocked_socket.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
 
         });
+        handles.push(h3);
 
-        h3.join().unwrap();
+        for h in handles {
+            h.join().unwrap();
+
+        }
 
         // socket.close(None);
+
 
     }
 }
