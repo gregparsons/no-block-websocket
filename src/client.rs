@@ -11,6 +11,7 @@ use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::stream::MaybeTlsStream;
 
+const TEST_SHUTDOWN_TIMER_SEC:u64 = 30;
 
 pub struct Client{
     socket_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>
@@ -59,7 +60,7 @@ impl Client {
                 // match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
                     Ok(_) => {},
                     Err(e) => {
-                        tracing::error!("[client] send error: {:?}", e);
+                        tracing::error!("[client] send error, exiting ping thread: {:?}", e);
                         break;
                     }
                 }
@@ -93,7 +94,6 @@ impl Client {
                 {
                     let mut ws2 = s3.lock().unwrap();
 
-
                     // https://www.reddit.com/r/rust/comments/dktiwf/reading_from_a_tcpstream_without_blocking/?rdt=54487
                     if ws2.can_read() {
 
@@ -123,6 +123,7 @@ impl Client {
                                 }
                             }
                             Err(_e) => {
+                                // todo: need to differentiate between errors when closed and nothing to read
                                 // tracing::error!("[client] read error: {e:?}");
                             }
                         }
@@ -136,13 +137,7 @@ impl Client {
         // TEST: close after a certain time
         let s4 = self.socket_arc.clone();
         let h3 = std::thread::spawn(move ||{
-            let closing_time = 90;
-            tracing::error!("[client] closing client websocket in {closing_time} seconds");
-            std::thread::sleep(Duration::from_secs(closing_time));
-            let mut unlocked_socket = s4.lock().unwrap();
-            tracing::debug!("[client] closing client websocket");
-            unlocked_socket.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
-
+            Client::shutdown(s4);
         });
         handles.push(h3);
 
@@ -154,4 +149,15 @@ impl Client {
 
 
     }
+
+    fn shutdown(s4: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+        tracing::error!("[client] closing client websocket in {TEST_SHUTDOWN_TIMER_SEC} seconds");
+        std::thread::sleep(Duration::from_secs(TEST_SHUTDOWN_TIMER_SEC));
+        let mut unlocked_socket = s4.lock().unwrap();
+        tracing::debug!("[client] closing client websocket");
+        unlocked_socket.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
+
+    }
 }
+
+

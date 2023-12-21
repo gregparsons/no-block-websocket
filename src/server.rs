@@ -10,10 +10,14 @@ use tungstenite::{Message, WebSocket};
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 
+const TEST_SHUTDOWN_TIMER_SEC:u64 = 5;
+
 #[derive(Debug)]
 pub struct Server;
 impl Server {
     pub fn run() {
+
+        let mut handles = vec![];
         let tcp_listener = TcpListener::bind("127.0.0.1:3012").unwrap();
 
         // for stream in listener.incoming()
@@ -26,75 +30,98 @@ impl Server {
                 match tungstenite::accept(tcp_stream.try_clone().unwrap()){
                     Ok(ws) => {
 
+                        // prevent read() from blocking everything; has to be done after handshake
                         tcp_stream.set_nonblocking(true).unwrap();
-
                         let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
 
-
-                        // closer thread
+                        // TEST: shutdown after a while
                         let ws1 = ws_arc.clone();
-                        spawn(move ||{
-                            let closing_time = 30;
-                            tracing::error!("[server] closing in {closing_time} seconds");
-                            std::thread::sleep(Duration::from_secs(closing_time));
-                            tracing::error!("[server] closing...");
-                            let mut ws1 = ws1.lock().unwrap();
-                            match ws1.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })) {
-                                Ok(_) => { tracing::debug!("[server] closed)"); },
-                                Err(e) => {tracing::debug!("[server] close error: {e:?})"); },
-                            }
+                        let handle = spawn(move ||{
+                            Server::shutdown(ws1);
                         });
+                        handles.push(handle);
 
+                        // Read loop
                         let ws2 = ws_arc.clone();
-                        spawn(move || {
-
+                        let handle = spawn(move || {
                             // read loop
                             loop {
-
                                 {
                                     let mut ws2 = ws2.lock().unwrap();
 
-                                    // read loop
-                                    if let Ok(msg) = ws2.read() {
-                                        match msg {
-                                            Message::Text(txt) => {
-                                                tracing::info!("[server] received text: {}", &txt);
-                                                match ws2.send(Message::Text(format!("server rcvd: {txt}"))) {
-                                                    Ok(_) => {},
-                                                    Err(e) => {
-                                                        tracing::error!("[server] send after close: {e:?}");
-                                                        // ws2.close(None).unwrap();
-                                                        break;
+                                    // read...
+                                    match ws2.read() {
+                                        Ok(msg) => {
+                                            match msg {
+                                                Message::Text(txt) => {
+                                                    tracing::info!("[server] received text: {}", &txt);
+                                                    match ws2.send(Message::Text(format!("server rcvd: {txt}"))) {
+                                                        Ok(_) => {},
+                                                        Err(e) => {
+                                                            tracing::error!("[server] send after close: {e:?}");
+                                                            // ws2.close(None).unwrap();
+                                                            break;
+                                                        }
                                                     }
                                                 }
+                                                Message::Ping(_ping) => {
+                                                    tracing::info!("[server] rcvd: PING");
+                                                    let _ = ws2.send(Message::Pong(vec![]));
+                                                },
+                                                // Message::Binary(Vec<u8>)=>{
+                                                //
+                                                // },
+                                                // Message::Pong(Vec<u8>)=>{
+                                                //
+                                                // },
+                                                // Message::Close(Option<CloseFrame<'static>>),
+                                                // Message::Frame(Frame),
+                                                _ => {}
                                             }
-                                            Message::Ping(_ping) => {
-                                                tracing::info!("[server] rcvd: PING");
-                                                let _ = ws2.send(Message::Pong(vec![]));
-                                            },
-                                            // Message::Binary(Vec<u8>)=>{
-                                            //
-                                            // },
-                                            // Message::Pong(Vec<u8>)=>{
-                                            //
-                                            // },
-                                            // Message::Close(Option<CloseFrame<'static>>),
-                                            // Message::Frame(Frame),
-                                            _ => {}
+                                        }
+                                        Err(_e) => {
+                                            // tracing::error!("[server] read error {e:?}");
                                         }
                                     }
                                 }
                                 // mutex now unlocked
+
+                                // tiny sleep to not over-poll; what's the right number? no clue, just need to not block the websocket w/read() in case we need to send something
+                                std::thread::sleep(Duration::from_millis(1));
                             }
                         });
-
-
+                        handles.push(handle);
                     }
-                    Err(_) => {}
+                    Err(e) => {
+                        // tungstenite accept
+                        tracing::error!("[server] tungstenite accept error: {e:?}");
+                    }
                 }
+            },
+            Err(e) => {
+                // tcp listener accept
+                tracing::error!("[server] TcpStream accept error: {e:?}");
             }
-            Err(_) => {}
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+    }
+
+
+    fn shutdown(ws1: Arc<Mutex<WebSocket<TcpStream>>>) {
+        tracing::error!("[server] closing in {TEST_SHUTDOWN_TIMER_SEC} seconds");
+        std::thread::sleep(Duration::from_secs(TEST_SHUTDOWN_TIMER_SEC));
+        tracing::error!("[server] closing...");
+        let mut ws1 = ws1.lock().unwrap();
+        match ws1.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })) {
+            Ok(_) => { tracing::debug!("[server] closed)"); },
+            Err(e) => {tracing::debug!("[server] close error: {e:?})"); },
         }
     }
+
 }
+
 
