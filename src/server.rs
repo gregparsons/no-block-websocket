@@ -5,23 +5,56 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
+use crossbeam_channel::{Receiver, RecvError};
 
 use tungstenite::{Message, WebSocket};
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-const TEST_SHUTDOWN_TIMER_SEC:u64 = 5;
+const TEST_SHUTDOWN_TIMER_SEC:u64 = 30;
+
+#[derive(Debug)]
+pub enum Msg {
+    Stop,
+    StartPing,
+}
 
 #[derive(Debug)]
 pub struct Server;
 impl Server {
-    pub fn run() {
+
+    fn control_comms(rx: Receiver<Msg>, arc: Arc<Mutex<WebSocket<TcpStream>>>, ) {
+
+        loop {
+            match rx.recv() {
+                Ok(msg) => {
+
+                    tracing::debug!("[client::control_comms] {msg:?}");
+                    match msg {
+                        Msg::Stop => {
+
+                        },
+                        Msg::StartPing => {
+
+                        },
+                    }
+
+
+                }
+                Err(e) => {
+                    tracing::error!("[client][control_comms] {e:?}");
+                }
+            }
+        }
+    }
+
+    pub fn run(s_rx: Receiver<Msg>) {
 
         let mut handles = vec![];
+
         let tcp_listener = TcpListener::bind("127.0.0.1:3012").unwrap();
 
         // for stream in listener.incoming()
-
         match tcp_listener.accept() {
             Ok((tcp_stream, _addr)) => {
 
@@ -33,6 +66,16 @@ impl Server {
                         // prevent read() from blocking everything; has to be done after handshake
                         tcp_stream.set_nonblocking(true).unwrap();
                         let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
+
+
+                        // start the control panel
+                        let ws0 = ws_arc.clone();
+                        let h = spawn(move ||{
+                            Server::control_comms(s_rx, ws0);
+                        });
+                        handles.push(h);
+
+
 
                         // TEST: shutdown after a while
                         let ws1 = ws_arc.clone();

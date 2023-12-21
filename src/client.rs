@@ -4,12 +4,15 @@
 
 use std::net::{TcpStream};
 use std::sync::{Arc, Mutex};
+use std::thread::spawn;
 use std::time::Duration;
+use crossbeam_channel::Receiver;
 use tungstenite::{Message, WebSocket};
 use tungstenite::client::client_with_config;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::stream::MaybeTlsStream;
+use crate::server::Msg;
 
 const TEST_SHUTDOWN_TIMER_SEC:u64 = 30;
 
@@ -18,7 +21,44 @@ pub struct Client{
 }
 
 impl Client {
-    pub fn new()->Self{
+
+    fn control_comms(rx: Receiver<Msg>, socket_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+
+        let mut handles = vec![];
+
+        loop {
+            match rx.recv() {
+                Ok(msg) => {
+
+                    tracing::debug!("[client::control_comms] {msg:?}");
+                    match msg {
+                        Msg::Stop => {
+
+                        },
+                        Msg::StartPing => {
+                            // thread to send 100 pings
+                            let s0 = socket_arc.clone();
+                            let join_handle_0 = std::thread::spawn(move || {
+                                Client::send_counter(s0);
+                            });
+                            handles.push(join_handle_0);
+                            tracing::debug!("[client] spawned counter thread");
+                        },
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("[client][control_comms] {e:?}");
+                }
+            }
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+
+    pub fn new(client_rx: Receiver<Msg>) ->Self{
 
         let tcp_stream = Arc::new(TcpStream::connect("127.0.0.1:3012").unwrap());
         let t1 = tcp_stream.clone();
@@ -40,45 +80,30 @@ impl Client {
             tracing::debug!("[client] * {}", header);
         }
 
-        Client{ socket_arc: Arc::new(Mutex::new(socket)) }
+
+        let socket_arc = Arc::new(Mutex::new(socket));
+
+        // start the control panel
+        let ws0 = socket_arc.clone();
+        let _h = spawn(move ||{
+            Client::control_comms(client_rx, ws0);
+        });
+
+        Client{ socket_arc  }
     }
 
 
     /// PING
-    fn send_counter(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
-        let max = 100;
 
-        tracing::debug!("[client] spawned counter thread to {max}");
-        for i in 0..max {
-            tracing::debug!("[client] sending ping: {i}");
-            // lock websocket
-            {
-                let mut unlocked_socket = ws_arc.lock().expect("[client] ping loop couldn't unlock");
-                // tracing::debug!("[client] ws locked, sending count");
-
-                match unlocked_socket.send(Message::Ping(vec![])){
-                // match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        tracing::error!("[client] send error, exiting ping thread: {:?}", e);
-                        break;
-                    }
-                }
-            }
-            // websocket unlocked
-            std::thread::sleep(Duration::from_secs(1));
-        }
-    }
 
     pub fn run(&mut self) {
+
         let mut handles = vec![];
-        // thread to send 100 messages to server
-        let s0 = self.socket_arc.clone();
-        let join_handle_0 = std::thread::spawn(move || {
-            Client::send_counter(s0);
-        });
-        handles.push(join_handle_0);
-        tracing::debug!("[client] spawned counter thread");
+
+
+
+
+
 
         // thread to read from the socket
         // read currently blocks, blocking the above "heartbeat"
@@ -158,6 +183,32 @@ impl Client {
         unlocked_socket.close(Some(CloseFrame{ code: CloseCode::Normal, reason: Default::default() })).unwrap();
 
     }
+
+    fn send_counter(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+        let max = 100;
+
+        tracing::debug!("[client] spawned counter thread to {max}");
+        for i in 0..max {
+            tracing::debug!("[client] sending ping: {i}");
+            // lock websocket
+            {
+                let mut unlocked_socket = ws_arc.lock().expect("[client] ping loop couldn't unlock");
+                // tracing::debug!("[client] ws locked, sending count");
+
+                match unlocked_socket.send(Message::Ping(vec![])){
+                    // match unlocked_socket.send(Message::Text(format!("client count: {}", i))) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        tracing::error!("[client] send error, exiting ping thread: {:?}", e);
+                        break;
+                    }
+                }
+            }
+            // websocket unlocked
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
 }
 
 
