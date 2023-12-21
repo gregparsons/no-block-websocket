@@ -12,9 +12,9 @@ use tungstenite::client::client_with_config;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::stream::MaybeTlsStream;
-use crate::server::Msg;
+use crate::command::Cmd;
+use crate::{CLIENT_READ_POLL_MS, TEST_SHUTDOWN_TIMER_SEC};
 
-const TEST_SHUTDOWN_TIMER_SEC:u64 = 30;
 
 pub struct Client{
     socket_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>
@@ -22,7 +22,7 @@ pub struct Client{
 
 impl Client {
 
-    fn control_comms(rx: Receiver<Msg>, socket_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+    fn control_comms(rx: Receiver<Cmd>, ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
 
         let mut handles = vec![];
 
@@ -32,14 +32,15 @@ impl Client {
 
                     tracing::debug!("[client::control_comms] {msg:?}");
                     match msg {
-                        Msg::Stop => {
-
-                        },
-                        Msg::StartPing => {
+                        Cmd::Shutdown => {
+                            Client::shutdown(ws_arc.clone());
+                            break;
+                        }
+                        Cmd::StartPing => {
                             // thread to send 100 pings
-                            let s0 = socket_arc.clone();
+                            let s0 = ws_arc.clone();
                             let join_handle_0 = std::thread::spawn(move || {
-                                Client::send_counter(s0);
+                                Client::ping(s0);
                             });
                             handles.push(join_handle_0);
                             tracing::debug!("[client] spawned counter thread");
@@ -58,7 +59,7 @@ impl Client {
     }
 
 
-    pub fn new(client_rx: Receiver<Msg>) ->Self{
+    pub fn new(client_rx: Receiver<Cmd>) ->Self{
 
         let tcp_stream = Arc::new(TcpStream::connect("127.0.0.1:3012").unwrap());
         let t1 = tcp_stream.clone();
@@ -154,17 +155,18 @@ impl Client {
                         }
                     }
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                // read poll rate
+                std::thread::sleep(Duration::from_millis(CLIENT_READ_POLL_MS));
             }
         });
         handles.push(join_handle_1);
 
         // TEST: close after a certain time
-        let s4 = self.socket_arc.clone();
-        let h3 = std::thread::spawn(move ||{
-            Client::shutdown(s4);
-        });
-        handles.push(h3);
+        // let s4 = self.socket_arc.clone();
+        // let h3 = std::thread::spawn(move ||{
+        //     Client::shutdown(s4);
+        // });
+        // handles.push(h3);
 
         for h in handles {
             h.join().unwrap();
@@ -175,6 +177,7 @@ impl Client {
 
     }
 
+    /// Both shutdown and ping are started externally with crossbeam "command" messages
     fn shutdown(s4: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
         tracing::error!("[client] closing client websocket in {TEST_SHUTDOWN_TIMER_SEC} seconds");
         std::thread::sleep(Duration::from_secs(TEST_SHUTDOWN_TIMER_SEC));
@@ -184,7 +187,10 @@ impl Client {
 
     }
 
-    fn send_counter(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+    /// send a series of PINGs to the server; run on a separate thread to prove
+    /// we can alternately read and write and that read doesn't block when there's nothing
+    /// coming from the server.
+    fn ping(ws_arc: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
         let max = 100;
 
         tracing::debug!("[client] spawned counter thread to {max}");

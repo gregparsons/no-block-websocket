@@ -5,25 +5,18 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
-use crossbeam_channel::{Receiver, RecvError};
-
+use crossbeam_channel::{Receiver};
 use tungstenite::{Message, WebSocket};
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
-
-const TEST_SHUTDOWN_TIMER_SEC:u64 = 30;
-
-#[derive(Debug)]
-pub enum Msg {
-    Stop,
-    StartPing,
-}
+use crate::command::Cmd;
+use crate::{SERVER_READ_POLL_MS, TEST_SHUTDOWN_TIMER_SEC};
 
 #[derive(Debug)]
 pub struct Server;
 impl Server {
 
-    fn control_comms(rx: Receiver<Msg>, arc: Arc<Mutex<WebSocket<TcpStream>>>, ) {
+    fn control_comms(rx: Receiver<Cmd>, ws_arc: Arc<Mutex<WebSocket<TcpStream>>>, ) {
 
         loop {
             match rx.recv() {
@@ -31,15 +24,12 @@ impl Server {
 
                     tracing::debug!("[client::control_comms] {msg:?}");
                     match msg {
-                        Msg::Stop => {
-
-                        },
-                        Msg::StartPing => {
-
-                        },
+                        Cmd::Shutdown => {
+                            Server::shutdown(ws_arc.clone());
+                            break;
+                        }
+                        _ => {},
                     }
-
-
                 }
                 Err(e) => {
                     tracing::error!("[client][control_comms] {e:?}");
@@ -48,7 +38,7 @@ impl Server {
         }
     }
 
-    pub fn run(s_rx: Receiver<Msg>) {
+    pub fn run(s_rx: Receiver<Cmd>) {
 
         let mut handles = vec![];
 
@@ -65,28 +55,26 @@ impl Server {
 
                         // prevent read() from blocking everything; has to be done after handshake
                         tcp_stream.set_nonblocking(true).unwrap();
+
+                        // command/control thread may want to write so need to get a lock
                         let ws_arc:Arc<Mutex<WebSocket<TcpStream>>> = Arc::new(Mutex::new(ws));
 
-
-                        // start the control panel
+                        // listen for control commands (inter-thread)
                         let ws0 = ws_arc.clone();
-                        let h = spawn(move ||{
-                            Server::control_comms(s_rx, ws0);
-                        });
+                        let h = spawn(move ||{ Server::control_comms(s_rx, ws0); });
                         handles.push(h);
 
-
-
-                        // TEST: shutdown after a while
-                        let ws1 = ws_arc.clone();
-                        let handle = spawn(move ||{
-                            Server::shutdown(ws1);
-                        });
-                        handles.push(handle);
+                        // TEST: confirm read loop can be interrupted; shutdown after a while
+                        // let ws1 = ws_arc.clone();
+                        // let handle = spawn(move ||{
+                        //     Server::shutdown(ws1);
+                        // });
+                        // handles.push(handle);
 
                         // Read loop
                         let ws2 = ws_arc.clone();
                         let handle = spawn(move || {
+
                             // read loop
                             loop {
                                 {
@@ -102,7 +90,6 @@ impl Server {
                                                         Ok(_) => {},
                                                         Err(e) => {
                                                             tracing::error!("[server] send after close: {e:?}");
-                                                            // ws2.close(None).unwrap();
                                                             break;
                                                         }
                                                     }
@@ -111,40 +98,28 @@ impl Server {
                                                     tracing::info!("[server] rcvd: PING");
                                                     let _ = ws2.send(Message::Pong(vec![]));
                                                 },
-                                                // Message::Binary(Vec<u8>)=>{
-                                                //
-                                                // },
-                                                // Message::Pong(Vec<u8>)=>{
-                                                //
-                                                // },
+                                                // Message::Binary(Vec<u8>)=>{},
+                                                // Message::Pong(Vec<u8>)=>{},
                                                 // Message::Close(Option<CloseFrame<'static>>),
                                                 // Message::Frame(Frame),
                                                 _ => {}
                                             }
                                         }
-                                        Err(_e) => {
-                                            // tracing::error!("[server] read error {e:?}");
-                                        }
+                                        Err(_e) => {}, // tracing::error!("[server] read error {e:?}");
                                     }
                                 }
-                                // mutex now unlocked
+                                // mutex lock released
 
-                                // tiny sleep to not over-poll; what's the right number? no clue, just need to not block the websocket w/read() in case we need to send something
-                                std::thread::sleep(Duration::from_millis(1));
+                                // tiny sleep; what's the right number? no clue, just need to not block the websocket w/read() in case we need to send something
+                                std::thread::sleep(Duration::from_millis(SERVER_READ_POLL_MS));
                             }
                         });
                         handles.push(handle);
                     }
-                    Err(e) => {
-                        // tungstenite accept
-                        tracing::error!("[server] tungstenite accept error: {e:?}");
-                    }
+                    Err(e) => tracing::error!("[server] tungstenite accept error: {e:?}"),
                 }
             },
-            Err(e) => {
-                // tcp listener accept
-                tracing::error!("[server] TcpStream accept error: {e:?}");
-            }
+            Err(e) => tracing::error!("[server] TcpStream accept error: {e:?}"),
         }
 
         for h in handles {
